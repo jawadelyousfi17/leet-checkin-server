@@ -1,0 +1,60 @@
+<%- include("../partials/header", { title: "Edit " + monitor.name }) %>
+
+<%
+  const cookieString = monitor.cookies && typeof monitor.cookies === "object"
+    ? Object.entries(monitor.cookies).map(([k, v]) => k + "=" + v).join("\n")
+    : "";
+  const keywordString = monitor.keywords
+    .map(k => (k.mode === "MISSING" ? "!" : "") + k.value)
+    .join("\n");
+%>
+
+<h1>Edit monitor</h1>
+
+<form method="post" action="/monitors/<%= monitor.id %>" class="form">
+  <label>
+    Name
+    <input name="name" required value="<%= monitor.name %>" />
+  </label>
+
+  <label>
+    URL
+    <input name="url" type="url" required value="<%= monitor.url %>" />
+  </label>
+
+  <label>
+    Interval (seconds)
+    <input name="intervalSec" type="number" min="5" value="<%= monitor.intervalSec %>" required />
+  </label>
+
+  <label>
+    Keywords (one per line — check passes if <em>any</em> rule is satisfied; prefix with <code>!</code> for MISSING)
+    <textarea name="keywords" rows="6" placeholder="welcome back&#10;!session expired"><%= keywordString %></textarea>
+  </label>
+
+  <label>
+    Marker keyword (sanity check — a string that <em>must always</em> be present to confirm the right page loaded; if missing, the check is flagged ERROR and an email is sent to <code><%= process.env.NOTIFY_EMAIL || "(NOTIFY_EMAIL unset)" %></code>)
+    <input name="markerKeyword" type="text" value="<%= monitor.markerKeyword || '' %>" />
+  </label>
+
+  <label>
+    Cookies (paste a raw <code>name=value;name2=value2;</code> string or one <code>name=value</code> per line — both work)
+    <textarea name="cookies" rows="4"><%= cookieString %></textarea>
+  </label>
+
+  <label style="flex-direction: row; align-items: center; gap: 10px;">
+    <input name="renderJs" type="checkbox" value="on" <%= monitor.renderJs ? "checked" : "" %> />
+    Render JavaScript (use a headless Chromium — required for SPAs and dynamic content; ~1–3s slower per check)
+  </label>
+
+  <div style="display: flex; gap: 10px;">
+    <button type="submit">Save changes</button>
+    <a href="/monitors/<%= monitor.id %>" style="align-self: center;">Cancel</a>
+  </div>
+</form>
+
+<p style="margin-top: 20px; color: #888; font-size: 0.9em;">
+  Note: editing keywords replaces the entire keyword list. Historical match details for removed keywords will be lost.
+</p>
+
+<%- include("../partials/footer") %>

@@ -68,6 +68,54 @@ dashboardRouter.get("/monitors/:id", async (req, res) => {
   res.render("monitors/show", { monitor });
 });
 
+dashboardRouter.get("/monitors/:id/edit", async (req, res) => {
+  const monitor = await prisma.monitor.findUnique({
+    where: { id: req.params.id },
+    include: { keywords: true },
+  });
+  if (!monitor) {
+    res.status(404).send("Monitor not found");
+    return;
+  }
+  res.render("monitors/edit", { monitor });
+});
+
+dashboardRouter.post("/monitors/:id", async (req, res) => {
+  const monitor = await prisma.monitor.findUnique({ where: { id: req.params.id } });
+  if (!monitor) {
+    res.status(404).send("Monitor not found");
+    return;
+  }
+
+  const { name, url, intervalSec, cookies, keywords } = req.body;
+  const parsedCookies = parseCookies(cookies);
+  const parsedKeywords = parseKeywords(keywords);
+  const renderJs = req.body.renderJs === "on" || req.body.renderJs === "true";
+  const markerKeyword =
+    typeof req.body.markerKeyword === "string" && req.body.markerKeyword.trim()
+      ? req.body.markerKeyword.trim()
+      : null;
+
+  await prisma.$transaction([
+    prisma.keyword.deleteMany({ where: { monitorId: monitor.id } }),
+    prisma.monitor.update({
+      where: { id: monitor.id },
+      data: {
+        name: String(name).trim(),
+        url: String(url).trim(),
+        intervalSec: Math.max(5, Number(intervalSec) || 60),
+        cookies: parsedCookies ?? Prisma.JsonNull,
+        renderJs,
+        markerKeyword,
+        keywords: { create: parsedKeywords },
+      },
+    }),
+  ]);
+
+  await monitorRunner.upsert(monitor.id);
+  res.redirect(`/monitors/${monitor.id}`);
+});
+
 dashboardRouter.post("/monitors/:id/toggle", async (req, res) => {
   const monitor = await prisma.monitor.findUnique({ where: { id: req.params.id } });
   if (!monitor) {

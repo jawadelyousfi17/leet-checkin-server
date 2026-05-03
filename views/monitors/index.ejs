@@ -44,6 +44,7 @@
             <% } %>
           </td>
           <td class="actions">
+            <a href="/monitors/<%= m.id %>/edit"><button type="button">Edit</button></a>
             <form method="post" action="/monitors/<%= m.id %>/toggle">
               <button><%= m.isActive ? "Pause" : "Resume" %></button>
             </form>

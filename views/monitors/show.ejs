@@ -82,6 +82,7 @@
   <% } %>
 </section>
 
+<a href="/monitors/<%= monitor.id %>/edit" style="display:inline-block"><button type="button">Edit</button></a>
 <form method="post" action="/monitors/<%= monitor.id %>/toggle" style="display:inline">
   <button><%= monitor.isActive ? "Pause" : "Resume" %></button>
 </form>

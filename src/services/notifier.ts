@@ -38,6 +38,23 @@ function nextCaller(): string | null {
 const resendKey = process.env.RESEND_API_KEY;
 const resendFrom = process.env.RESEND_FROM;
 
+// Resend free tier caps at 5 req/s. Cap ourselves at 4/s by spacing call starts
+// 250ms apart — each scheduled call reserves the next slot, regardless of how
+// long the underlying API request takes.
+const RESEND_MIN_INTERVAL_MS = 250;
+let resendNextSlot = 0;
+function scheduleResend<T>(fn: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const slot = Math.max(now, resendNextSlot);
+  resendNextSlot = slot + RESEND_MIN_INTERVAL_MS;
+  const delay = slot - now;
+  return new Promise<T>((resolve, reject) => {
+    setTimeout(() => {
+      fn().then(resolve, reject);
+    }, delay);
+  });
+}
+
 const twilioClient =
   twilioSid && twilioToken ? twilio(twilioSid, twilioToken) : null;
 const resendClient = resendKey ? new Resend(resendKey) : null;
@@ -255,7 +272,9 @@ export async function sendEmailTo(
 ): Promise<ChannelResult> {
   if (!resendClient || !resendFrom) return skipped("resend not configured");
   try {
-    const result = await resendClient.emails.send({ from: resendFrom, to, subject, text });
+    const result = await scheduleResend(() =>
+      resendClient.emails.send({ from: resendFrom, to, subject, text }),
+    );
     if (result.error) {
       return { ok: false, status: "error", details: { error: result.error } };
     }
