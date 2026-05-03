@@ -1,0 +1,70 @@
+<%- include("../partials/header", { title: "Notification deliveries" }) %>
+
+<h1>Notification deliveries</h1>
+<p class="meta">Every keyword match and which recipients each channel reached. Newest first; capped at 100.</p>
+
+<nav class="filter">
+  <a href="/notifications" class="<%= channel ? '' : 'active' %>">All</a>
+  <% channels.forEach(function (ch) { %>
+    <a href="/notifications?channel=<%= ch %>" class="<%= channel === ch ? 'active' : '' %>"><%= ch %></a>
+  <% }) %>
+</nav>
+
+<% if (matches.length === 0) { %>
+  <p class="empty">
+    <% if (channel) { %>
+      No matches with a <code><%= channel %></code> dispatch yet. <a href="/notifications">Show all channels</a>.
+    <% } else { %>
+      No matches yet. When a monitor's keyword condition is satisfied, the dispatch will appear here.
+    <% } %>
+  </p>
+<% } else { %>
+  <% matches.forEach(function (c) { %>
+    <% const matchedKw = c.keywordResults.filter(function (r) { return r.matched; }); %>
+    <% const failed = c.notifications.filter(function (n) { return !n.ok; }).length; %>
+    <% const ok = c.notifications.length - failed; %>
+    <section style="margin-top: 28px;">
+      <h2 style="margin-bottom: 4px;">
+        <a href="/monitors/<%= c.monitor.id %>"><%= c.monitor.name %></a>
+        <small class="meta" style="font-weight: normal;"> — <%= c.checkedAt.toISOString() %></small>
+      </h2>
+      <p class="meta" style="margin-top: 0;">
+        <a href="<%= c.monitor.url %>" target="_blank" rel="noopener"><%= c.monitor.url %></a>
+        <% if (c.httpStatus != null) { %> · HTTP <%= c.httpStatus %><% } %>
+        <% if (c.durationMs != null) { %> · <%= c.durationMs %>ms<% } %>
+        <% if (matchedKw.length > 0) { %>
+          · matched:
+          <% matchedKw.forEach(function (r, i) { %>
+            <code><%= r.keyword.mode === "MISSING" ? "!" : "" %><%= r.keyword.value %></code><%= i < matchedKw.length - 1 ? ", " : "" %>
+          <% }) %>
+        <% } %>
+      </p>
+      <p>
+        <span class="badge badge-ok">ok: <%= ok %></span>
+        <% if (failed > 0) { %><span class="badge badge-fail">failed: <%= failed %></span><% } %>
+      </p>
+
+      <table class="table">
+        <thead>
+          <tr><th>Channel</th><th>Recipient</th><th>Status</th><th>Provider details</th></tr>
+        </thead>
+        <tbody>
+          <% c.notifications.forEach(function (n) { %>
+            <tr>
+              <td><%= n.channel %></td>
+              <td><code><%= n.recipient %></code></td>
+              <td>
+                <span class="badge <%= n.ok ? 'badge-ok' : (n.providerStatus === 'skipped' ? 'badge-muted' : 'badge-fail') %>">
+                  <%= n.providerStatus %>
+                </span>
+              </td>
+              <td><code><%= JSON.stringify(n.details) %></code></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </section>
+  <% }) %>
+<% } %>
+
+<%- include("../partials/footer") %>

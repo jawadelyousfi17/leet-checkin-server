@@ -1,0 +1,21 @@
+<%- include("../partials/header", { title: "Test SMS batch" }) %>
+
+<h1>Test SMS batch</h1>
+<p class="meta">Fires N SMS in parallel via Twilio, waits a few seconds, then refetches each message's status from Twilio.</p>
+
+<form method="post" action="/test-sms" class="form">
+  <label>
+    Count (max 100)
+    <input name="count" type="number" min="1" max="100" value="3" required />
+    <small class="meta">Twilio caps actual <em>delivery</em> at ~1/sec per sender, so large batches will mostly read as <code>queued</code>/<code>sending</code> after the 4-second refetch.</small>
+  </label>
+
+  <label>
+    Message
+    <input name="message" type="text" maxlength="500" value="leet-checkin batch test" required />
+  </label>
+
+  <button type="submit">Send batch</button>
+</form>
+
+<%- include("../partials/footer") %>

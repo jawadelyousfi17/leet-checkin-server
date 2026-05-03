@@ -1,0 +1,92 @@
+<%- include("../partials/header", { title: monitor.name }) %>
+
+<h1><%= monitor.name %></h1>
+<p class="meta">
+  <a href="<%= monitor.url %>" target="_blank" rel="noopener"><%= monitor.url %></a>
+  &middot; every <%= monitor.intervalSec %>s
+  &middot;
+  <% if (monitor.isActive) { %>
+    <span class="badge badge-ok">active</span>
+  <% } else { %>
+    <span class="badge badge-muted">paused</span>
+  <% } %>
+  <% if (monitor.renderJs) { %>
+    &middot; <span class="badge badge-err">JS</span>
+  <% } %>
+  <% if (monitor.markerKeyword) { %>
+    &middot; marker: <code><%= monitor.markerKeyword %></code>
+  <% } %>
+</p>
+
+<section>
+  <h2>Keywords</h2>
+  <% if (monitor.keywords.length === 0) { %>
+    <p class="empty">No keywords configured.</p>
+  <% } else { %>
+    <ul>
+      <% monitor.keywords.forEach(function (k) { %>
+        <li>
+          <code><%= k.value %></code>
+          <span class="badge <%= k.mode === 'PRESENT' ? 'badge-ok' : 'badge-fail' %>">must be <%= k.mode %></span>
+        </li>
+      <% }) %>
+    </ul>
+  <% } %>
+</section>
+
+<section>
+  <h2>Recent checks</h2>
+  <% if (monitor.checks.length === 0) { %>
+    <p class="empty">No checks have run yet.</p>
+  <% } else { %>
+    <table class="table">
+      <thead>
+        <tr><th>When</th><th>Status</th><th>HTTP</th><th>Duration</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <% monitor.checks.forEach(function (c) { %>
+          <tr>
+            <td><%= c.checkedAt.toISOString() %></td>
+            <td>
+              <% if (c.status === "PASSING") { %>
+                <span class="badge badge-ok">PASSING</span>
+              <% } else if (c.status === "FAILING") { %>
+                <span class="badge badge-fail">FAILING</span>
+              <% } else { %>
+                <span class="badge badge-err">ERROR</span>
+              <% } %>
+            </td>
+            <td><%= c.httpStatus ?? "—" %></td>
+            <td><%= c.durationMs != null ? c.durationMs + "ms" : "—" %></td>
+            <td>
+              <% if (c.errorMessage) { %>
+                <code class="err"><%= c.errorMessage %></code>
+              <% } else if (c.keywordResults.length === 0) { %>
+                no keyword rules
+              <% } else { %>
+                <% const matched = c.keywordResults.filter(function (r) { return r.matched; }); %>
+                <% if (matched.length > 0) { %>
+                  matched:
+                  <% matched.forEach(function (r, i) { %>
+                    <code><%= r.keyword.value %></code><%= i < matched.length - 1 ? ", " : "" %>
+                  <% }) %>
+                <% } else { %>
+                  no rules matched
+                <% } %>
+              <% } %>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
+<form method="post" action="/monitors/<%= monitor.id %>/toggle" style="display:inline">
+  <button><%= monitor.isActive ? "Pause" : "Resume" %></button>
+</form>
+<form method="post" action="/monitors/<%= monitor.id %>/delete" style="display:inline" onsubmit="return confirm('Delete this monitor?')">
+  <button class="danger">Delete</button>
+</form>
+
+<%- include("../partials/footer") %>

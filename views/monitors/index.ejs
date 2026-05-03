@@ -1,0 +1,60 @@
+<%- include("../partials/header", { title: "Monitors" }) %>
+
+<h1>Monitors</h1>
+
+<% if (monitors.length === 0) { %>
+  <p class="empty">No monitors yet. <a href="/monitors/new">Create one</a>.</p>
+<% } else { %>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>URL</th>
+        <th>Interval</th>
+        <th>Keywords</th>
+        <th>Active</th>
+        <th>Last check</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% monitors.forEach(function (m) { %>
+        <% const last = m.checks[0]; %>
+        <tr>
+          <td><a href="/monitors/<%= m.id %>"><%= m.name %></a></td>
+          <td class="url"><%= m.url %></td>
+          <td><%= m.intervalSec %>s</td>
+          <td><%= m.keywords.length %></td>
+          <td>
+            <% if (m.isActive) { %>
+              <span class="badge badge-ok">on</span>
+            <% } else { %>
+              <span class="badge badge-muted">off</span>
+            <% } %>
+          </td>
+          <td>
+            <% if (!last) { %>
+              <span class="badge badge-muted">no checks yet</span>
+            <% } else if (last.status === "PASSING") { %>
+              <span class="badge badge-ok">PASSING</span>
+            <% } else if (last.status === "FAILING") { %>
+              <span class="badge badge-fail">FAILING</span>
+            <% } else { %>
+              <span class="badge badge-err">ERROR</span>
+            <% } %>
+          </td>
+          <td class="actions">
+            <form method="post" action="/monitors/<%= m.id %>/toggle">
+              <button><%= m.isActive ? "Pause" : "Resume" %></button>
+            </form>
+            <form method="post" action="/monitors/<%= m.id %>/delete" onsubmit="return confirm('Delete this monitor?')">
+              <button class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+<% } %>
+
+<%- include("../partials/footer") %>

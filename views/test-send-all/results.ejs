@@ -1,0 +1,61 @@
+<%- include("../partials/header", { title: "Send-all results" }) %>
+
+<h1>Send-all results</h1>
+
+<% if (summary.error) { %>
+  <p><span class="badge badge-fail">error</span> Could not run fan-out:</p>
+  <p><code class="err"><%= summary.error %></code></p>
+<% } else { %>
+  <p class="meta">
+    Reached <strong><%= summary.users %></strong> user<%= summary.users === 1 ? "" : "s" %>,
+    dispatched <strong><%= summary.results.length %></strong> send<%= summary.results.length === 1 ? "" : "s" %>
+    in <%= elapsedMs %>ms.
+    <% if (summary.failed > 0) { %>
+      <span class="badge badge-fail"><%= summary.failed %> failed</span>
+    <% } else if (summary.results.length > 0) { %>
+      <span class="badge badge-ok">all ok</span>
+    <% } %>
+  </p>
+
+  <p>
+    <span class="badge badge-muted">sms: <%= summary.dispatched.sms %></span>
+    <span class="badge badge-muted">call: <%= summary.dispatched.call %></span>
+    <span class="badge badge-muted">email: <%= summary.dispatched.email %></span>
+    <span class="badge badge-muted">whatsapp: <%= summary.dispatched.whatsapp %></span>
+    <span class="badge badge-muted">webhook: <%= summary.dispatched.webhook %></span>
+  </p>
+
+  <p class="meta">
+    <strong>Subject:</strong> <code><%= subject %></code><br />
+    <strong>Body:</strong> <code><%= text %></code>
+  </p>
+
+  <% if (summary.results.length === 0) { %>
+    <p class="empty">No sends dispatched. Check that users in <code>/api/all-users</code> have channel toggles enabled.</p>
+  <% } else { %>
+    <table class="table">
+      <thead>
+        <tr><th>#</th><th>Channel</th><th>Recipient</th><th>Status</th><th>Details</th></tr>
+      </thead>
+      <tbody>
+        <% summary.results.forEach(function (row, i) { %>
+          <tr>
+            <td><%= i + 1 %></td>
+            <td><%= row.channel %></td>
+            <td><code><%= row.recipient %></code></td>
+            <td>
+              <span class="badge <%= row.result.ok ? 'badge-ok' : (row.result.status === 'skipped' ? 'badge-muted' : 'badge-fail') %>">
+                <%= row.result.status %>
+              </span>
+            </td>
+            <td><code><%= JSON.stringify(row.result.details) %></code></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+<% } %>
+
+<p><a href="/test-send-all">Run again</a> · <a href="/">Back to monitors</a></p>
+
+<%- include("../partials/footer") %>

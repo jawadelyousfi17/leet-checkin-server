@@ -1,0 +1,49 @@
+<%- include("../partials/header", { title: "SMS batch results" }) %>
+
+<h1>SMS batch results</h1>
+<p class="meta">
+  Sent <%= count %> message<%= count === 1 ? "" : "s" %> in <%= elapsedMs %>ms (includes a status-refetch delay).
+  Body prefix: <code><%= message %></code>
+</p>
+
+<%
+function badgeClass(status) {
+  if (status === "delivered" || status === "sent") return "badge-ok";
+  if (status === "failed" || status === "undelivered" || status === "error") return "badge-fail";
+  if (status === "queued" || status === "accepted" || status === "sending") return "badge-err";
+  return "badge-muted";
+}
+const counts = results.reduce(function (acc, r) { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+%>
+
+<p>
+  <% Object.keys(counts).forEach(function (s) { %>
+    <span class="badge <%= badgeClass(s) %>"><%= s %>: <%= counts[s] %></span>
+  <% }) %>
+</p>
+
+<table class="table">
+  <thead>
+    <tr><th>#</th><th>SID</th><th>Status</th><th>Error</th></tr>
+  </thead>
+  <tbody>
+    <% results.forEach(function (r, i) { %>
+      <tr>
+        <td><%= i + 1 %></td>
+        <td><code><%= r.sid || "—" %></code></td>
+        <td><span class="badge <%= badgeClass(r.status) %>"><%= r.status %></span></td>
+        <td>
+          <% if (r.errorCode != null || r.errorMessage) { %>
+            <code class="err"><%= r.errorCode != null ? "[" + r.errorCode + "] " : "" %><%= r.errorMessage || "" %></code>
+          <% } else { %>
+            —
+          <% } %>
+        </td>
+      </tr>
+    <% }) %>
+  </tbody>
+</table>
+
+<p><a href="/test-sms">Run another batch</a> · <a href="/">Back to monitors</a></p>
+
+<%- include("../partials/footer") %>

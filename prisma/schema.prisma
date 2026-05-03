@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum KeywordMode {
+  PRESENT
+  MISSING
+}
+
+enum CheckStatus {
+  PASSING
+  FAILING
+  ERROR
+}
+
+model Monitor {
+  id          String    @id @default(cuid())
+  name        String
+  url         String
+  intervalSec Int       @default(60)
+  cookies     Json?
+  renderJs    Boolean   @default(false)
+  markerKeyword String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  keywords      Keyword[]
+  checks        Check[]
+  notifications Notification[]
+}
+
+model Keyword {
+  id        String      @id @default(cuid())
+  monitorId String
+  value     String
+  mode      KeywordMode @default(PRESENT)
+  createdAt DateTime    @default(now())
+
+  monitor   Monitor          @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  results   KeywordResult[]
+
+  @@index([monitorId])
+}
+
+model Check {
+  id             String      @id @default(cuid())
+  monitorId      String
+  status         CheckStatus
+  httpStatus     Int?
+  durationMs     Int?
+  errorMessage   String?
+  checkedAt      DateTime    @default(now())
+
+  monitor        Monitor          @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  keywordResults KeywordResult[]
+  notifications  Notification[]
+
+  @@index([monitorId, checkedAt])
+}
+
+enum NotificationChannel {
+  SMS
+  CALL
+  EMAIL
+  WHATSAPP
+  WEBHOOK
+}
+
+model Notification {
+  id             String              @id @default(cuid())
+  checkId        String
+  monitorId      String
+  channel        NotificationChannel
+  recipient      String
+  ok             Boolean
+  providerStatus String
+  details        Json?
+  createdAt      DateTime            @default(now())
+
+  check          Check   @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  monitor        Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+
+  @@index([checkId])
+  @@index([monitorId, createdAt])
+}
+
+model KeywordResult {
+  id        String  @id @default(cuid())
+  checkId   String
+  keywordId String
+  matched   Boolean
+
+  check     Check   @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  keyword   Keyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@index([checkId])
+  @@index([keywordId])
+}

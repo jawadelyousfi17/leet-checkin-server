@@ -1,0 +1,44 @@
+<%- include("../partials/header", { title: "New monitor" }) %>
+
+<h1>New monitor</h1>
+
+<form method="post" action="/monitors" class="form">
+  <label>
+    Name
+    <input name="name" required placeholder="My site homepage" />
+  </label>
+
+  <label>
+    URL
+    <input name="url" type="url" required placeholder="https://example.com" />
+  </label>
+
+  <label>
+    Interval (seconds)
+    <input name="intervalSec" type="number" min="5" value="60" required />
+  </label>
+
+  <label>
+    Keywords (one per line — check passes if <em>any</em> rule is satisfied; prefix with <code>!</code> for MISSING)
+    <textarea name="keywords" rows="6" placeholder="welcome back&#10;!session expired"></textarea>
+  </label>
+
+  <label>
+    Marker keyword (sanity check — a string that <em>must always</em> be present to confirm the right page loaded; if missing, the check is flagged ERROR and an email is sent to <code><%= process.env.NOTIFY_EMAIL || "(NOTIFY_EMAIL unset)" %></code>)
+    <input name="markerKeyword" type="text" placeholder="e.g. &lt;title&gt;Admission Results&lt;/title&gt;" />
+  </label>
+
+  <label>
+    Cookies (paste a raw <code>name=value;name2=value2;</code> string or one <code>name=value</code> per line — both work)
+    <textarea name="cookies" rows="4" placeholder="SAPISID=…; __Secure-3PSID=…; NID=531=…"></textarea>
+  </label>
+
+  <label style="flex-direction: row; align-items: center; gap: 10px;">
+    <input name="renderJs" type="checkbox" value="on" />
+    Render JavaScript (use a headless Chromium — required for SPAs and dynamic content; ~1–3s slower per check)
+  </label>
+
+  <button type="submit">Create monitor</button>
+</form>
+
+<%- include("../partials/footer") %>

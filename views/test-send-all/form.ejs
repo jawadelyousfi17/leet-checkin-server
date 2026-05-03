@@ -1,0 +1,23 @@
+<%- include("../partials/header", { title: "Test send-all" }) %>
+
+<h1>Test send-all</h1>
+<p class="meta">
+  Runs the live notification flow on demand: fetches the user list from <code><%= process.env.HOST_API || "(HOST_API unset)" %>/api/all-users</code>
+  and dispatches to every channel each user has enabled (SMS, voice, email, WhatsApp, webhook). Same code path the runner uses on a match.
+</p>
+
+<form method="post" action="/test-send-all" class="form">
+  <label>
+    Subject
+    <input name="subject" type="text" maxlength="200" value="[leet-checkin] debug fan-out" required />
+  </label>
+
+  <label>
+    Body
+    <textarea name="text" rows="4" required>Manual fan-out test from the dashboard.</textarea>
+  </label>
+
+  <button type="submit">Send to all users</button>
+</form>
+
+<%- include("../partials/footer") %>
