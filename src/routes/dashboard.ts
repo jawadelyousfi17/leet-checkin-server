@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { monitorRunner } from "../services/monitorRunner";
 import { notify, sendOneSms, fetchSmsStatus, type SmsResult } from "../services/notifier";
+import { getAllUsers, type ApiUser } from "../services/usersClient";
 
 export const dashboardRouter = Router();
 
@@ -28,6 +29,8 @@ dashboardRouter.post("/monitors", async (req, res) => {
   const parsedKeywords = parseKeywords(keywords);
 
   const renderJs = req.body.renderJs === "on" || req.body.renderJs === "true";
+  const htmlDiffEnabled =
+    req.body.htmlDiffEnabled === "on" || req.body.htmlDiffEnabled === "true";
   const markerKeyword =
     typeof req.body.markerKeyword === "string" && req.body.markerKeyword.trim()
       ? req.body.markerKeyword.trim()
@@ -40,6 +43,7 @@ dashboardRouter.post("/monitors", async (req, res) => {
       intervalSec: Math.max(5, Number(intervalSec) || 60),
       cookies: parsedCookies ?? Prisma.JsonNull,
       renderJs,
+      htmlDiffEnabled,
       markerKeyword,
       keywords: { create: parsedKeywords },
     },
@@ -91,10 +95,17 @@ dashboardRouter.post("/monitors/:id", async (req, res) => {
   const parsedCookies = parseCookies(cookies);
   const parsedKeywords = parseKeywords(keywords);
   const renderJs = req.body.renderJs === "on" || req.body.renderJs === "true";
+  const htmlDiffEnabled =
+    req.body.htmlDiffEnabled === "on" || req.body.htmlDiffEnabled === "true";
   const markerKeyword =
     typeof req.body.markerKeyword === "string" && req.body.markerKeyword.trim()
       ? req.body.markerKeyword.trim()
       : null;
+
+  // Reset the baseline when toggling diff on, or when toggling off (so a later
+  // re-enable starts fresh). Otherwise leave it alone so existing baselines
+  // survive name/url/interval edits.
+  const resetBaseline = htmlDiffEnabled !== monitor.htmlDiffEnabled;
 
   await prisma.$transaction([
     prisma.keyword.deleteMany({ where: { monitorId: monitor.id } }),
@@ -106,8 +117,10 @@ dashboardRouter.post("/monitors/:id", async (req, res) => {
         intervalSec: Math.max(5, Number(intervalSec) || 60),
         cookies: parsedCookies ?? Prisma.JsonNull,
         renderJs,
+        htmlDiffEnabled,
         markerKeyword,
         keywords: { create: parsedKeywords },
+        ...(resetBaseline ? { htmlDiffBaseline: null } : {}),
       },
     }),
   ]);
@@ -167,6 +180,29 @@ dashboardRouter.get("/notifications", async (req, res) => {
     channel,
     channels: NOTIFICATION_CHANNELS,
   });
+});
+
+dashboardRouter.get("/users", async (_req, res) => {
+  let users: ApiUser[] = [];
+  let error: string | null = null;
+  try {
+    users = await getAllUsers();
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+  const stats = users.reduce(
+    (acc, u) => {
+      if (u.smsEnabled) acc.sms++;
+      if (u.callEnabled) acc.call++;
+      if (u.emailEnabled) acc.email++;
+      if (u.whatsappEnabled) acc.whatsapp++;
+      if (u.webhookEnabled) acc.webhook++;
+      if (u.monitoringStartedAt) acc.monitoring++;
+      return acc;
+    },
+    { sms: 0, call: 0, email: 0, whatsapp: 0, webhook: 0, monitoring: 0 },
+  );
+  res.render("users/index", { users, error, stats });
 });
 
 dashboardRouter.get("/test-sms", (_req, res) => {

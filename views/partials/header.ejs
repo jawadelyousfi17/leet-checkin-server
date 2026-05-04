@@ -3,17 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title><%= typeof title !== "undefined" ? title : "leet-checkin" %></title>
+    <title><%= typeof title !== "undefined" ? title : "Leet Checkin Service" %></title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div class="gov-banner">
+      Leet Checkin Service &middot; Internal monitoring portal
+    </div>
     <header class="topbar">
-      <a href="/" class="brand">leet-checkin</a>
+      <a href="/" class="brand">Leet Checkin Service</a>
       <nav>
+        <a href="/">Monitors</a>
+        <a href="/users">Users</a>
         <a href="/notifications">Deliveries</a>
         <a href="/test-sms">Test SMS</a>
         <a href="/test-send-all">Send-all</a>
-        <a href="/monitors/new">+ New monitor</a>
+        <a href="/monitors/new">New monitor</a>
       </nav>
     </header>
     <main class="container">

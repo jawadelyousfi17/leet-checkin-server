@@ -47,6 +47,14 @@
     Render JavaScript (use a headless Chromium — required for SPAs and dynamic content; ~1–3s slower per check)
   </label>
 
+  <label style="flex-direction: row; align-items: center; gap: 10px;">
+    <input name="htmlDiffEnabled" type="checkbox" value="on" <%= monitor.htmlDiffEnabled ? "checked" : "" %> />
+    Watch for ANY HTML change (extreme mode — fires notifications when the page differs from the previous check; uses a normalized hash so CSRF tokens / scripts / whitespace are ignored)
+    <% if (monitor.htmlDiffEnabled && monitor.htmlDiffBaseline) { %>
+      <small style="color:#555;">— baseline: <code><%= monitor.htmlDiffBaseline.slice(0, 12) %>…</code></small>
+    <% } %>
+  </label>
+
   <div style="display: flex; gap: 10px;">
     <button type="submit">Save changes</button>
     <a href="/monitors/<%= monitor.id %>" style="align-self: center;">Cancel</a>

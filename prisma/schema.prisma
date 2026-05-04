@@ -26,6 +26,8 @@ model Monitor {
   cookies     Json?
   renderJs    Boolean   @default(false)
   markerKeyword String?
+  htmlDiffEnabled  Boolean @default(false)
+  htmlDiffBaseline String?
   isActive    Boolean   @default(true)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

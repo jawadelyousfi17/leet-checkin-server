@@ -1,7 +1,9 @@
+import crypto from "crypto";
 import { Prisma, type Keyword, type Monitor } from "@prisma/client";
 import { prisma } from "../db";
 import { notify, sendEmailTo, type NotifySummary } from "./notifier";
 import { getBrowser } from "./browser";
+import { refreshLoginCookies, shouldAttemptRefresh } from "./cookieRefresher";
 
 type CachedMonitor = Monitor & { keywords: Keyword[] };
 
@@ -12,12 +14,21 @@ type CheckOutcome = {
   errorMessage: string | null;
   keywordResults: { keywordId: string; matched: boolean }[];
   markerMissing: boolean;
+  htmlDiff: {
+    enabled: boolean;
+    newHash: string | null;
+    changed: boolean;
+    firstSeen: boolean;
+  };
 };
 
 class MonitorRunner {
   private cache = new Map<string, CachedMonitor>();
   private timers = new Map<string, NodeJS.Timeout>();
   private markerOk = new Map<string, boolean>();
+  private lastRefreshAt = new Map<string, number>();
+  private refreshing = new Set<string>();
+  private static readonly REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
   private started = false;
 
   async start(): Promise<void> {
@@ -50,6 +61,8 @@ class MonitorRunner {
     this.cancelTimer(id);
     this.cache.delete(id);
     this.markerOk.delete(id);
+    this.lastRefreshAt.delete(id);
+    this.refreshing.delete(id);
   }
 
   list(): CachedMonitor[] {
@@ -70,6 +83,47 @@ class MonitorRunner {
     const t = this.timers.get(id);
     if (t) clearTimeout(t);
     this.timers.delete(id);
+  }
+
+  private async maybeRefreshCookies(m: CachedMonitor): Promise<void> {
+    if (this.refreshing.has(m.id)) return;
+    if (!shouldAttemptRefresh(m.url)) return;
+
+    const now = Date.now();
+    const last = this.lastRefreshAt.get(m.id) ?? 0;
+    if (now - last < MonitorRunner.REFRESH_COOLDOWN_MS) {
+      const waitSec = Math.ceil((MonitorRunner.REFRESH_COOLDOWN_MS - (now - last)) / 1000);
+      console.log(
+        `[monitor-runner] ${m.name}: marker missing — skip relogin (cooldown ${waitSec}s left)`,
+      );
+      return;
+    }
+
+    this.refreshing.add(m.id);
+    this.lastRefreshAt.set(m.id, now);
+    console.log(`[monitor-runner] ${m.name}: marker missing — attempting relogin`);
+    try {
+      const result = await refreshLoginCookies();
+      if (!result.ok) {
+        console.warn(`[monitor-runner] ${m.name}: relogin failed — ${result.error}`);
+        return;
+      }
+      await prisma.monitor.update({
+        where: { id: m.id },
+        data: { cookies: result.cookies as Prisma.InputJsonValue },
+      });
+      const cached = this.cache.get(m.id);
+      if (cached) {
+        cached.cookies = result.cookies as Monitor["cookies"];
+      }
+      console.log(
+        `[monitor-runner] ${m.name}: cookies refreshed (${Object.keys(result.cookies).length} cookies, finalUrl=${result.finalUrl})`,
+      );
+    } catch (err) {
+      console.error(`[monitor-runner] ${m.name}: relogin threw:`, err);
+    } finally {
+      this.refreshing.delete(m.id);
+    }
   }
 
   private async tick(id: string): Promise<void> {
@@ -106,6 +160,7 @@ class MonitorRunner {
     }
 
     if (outcome.markerMissing) {
+      await this.maybeRefreshCookies(m);
       // Skip the match flow entirely — we're not on the right page, so there's
       // nothing meaningful to evaluate. Reschedule and try again next interval.
       const stillCached = this.cache.get(id);
@@ -113,7 +168,38 @@ class MonitorRunner {
       return;
     }
 
+    // Persist the new HTML hash on first-seen (so we don't fire on the next
+    // check just because no baseline existed) or whenever it actually changed
+    // (so we don't keep firing on every check after a single change).
+    if (
+      outcome.htmlDiff.enabled &&
+      outcome.htmlDiff.newHash &&
+      outcome.htmlDiff.newHash !== m.htmlDiffBaseline
+    ) {
+      try {
+        await prisma.monitor.update({
+          where: { id: m.id },
+          data: { htmlDiffBaseline: outcome.htmlDiff.newHash },
+        });
+        const cached = this.cache.get(id);
+        if (cached) cached.htmlDiffBaseline = outcome.htmlDiff.newHash;
+        if (outcome.htmlDiff.firstSeen) {
+          console.log(`[monitor-runner] ${m.name}: html diff baseline recorded (first run)`);
+        } else {
+          console.log(`[monitor-runner] ${m.name}: html diff CHANGED — baseline updated`);
+        }
+      } catch (err) {
+        console.error(`[monitor-runner] failed to persist html diff baseline for ${m.id}:`, err);
+      }
+    }
+
     if (outcome.status === "PASSING") {
+      const trigger = outcome.htmlDiff.changed
+        ? "diff"
+        : outcome.keywordResults.some((r) => r.matched)
+          ? "keyword"
+          : "legacy";
+      console.log(`[monitor-runner] ${m.name}: PASSING (trigger=${trigger}) — notifying + pausing`);
       let summary;
       try {
         summary = await notifyMatch(m, outcome);
@@ -180,6 +266,7 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
         errorMessage: `Marker keyword "${m.markerKeyword}" not found in response — wrong page, redirect, login wall, or render failure`,
         keywordResults: [],
         markerMissing: true,
+        htmlDiff: { enabled: m.htmlDiffEnabled, newHash: null, changed: false, firstSeen: false },
       };
     }
 
@@ -189,17 +276,68 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
       return { keywordId: k.id, matched };
     });
 
+    // HTML diff — hash a normalized version of the body and compare to the
+    // baseline stored on the monitor. First time we see a body, we record the
+    // baseline but DON'T fire (otherwise every new monitor would trigger).
+    let htmlDiffNewHash: string | null = null;
+    let htmlDiffChanged = false;
+    let htmlDiffFirstSeen = false;
+    if (m.htmlDiffEnabled) {
+      htmlDiffNewHash = hashHtml(fetched.body);
+      if (!m.htmlDiffBaseline) {
+        htmlDiffFirstSeen = true;
+      } else if (m.htmlDiffBaseline !== htmlDiffNewHash) {
+        htmlDiffChanged = true;
+      }
+    }
+
     const httpOk = fetched.httpStatus >= 200 && fetched.httpStatus < 400;
-    const keywordsOk =
-      keywordResults.length === 0 || keywordResults.some((r) => r.matched);
+    const keywordsConfigured = m.keywords.length > 0;
+    const keywordsMatched =
+      keywordsConfigured && keywordResults.some((r) => r.matched);
+
+    // Match logic. Diff watching DOESN'T require httpOk — the whole point is
+    // "tell me if the page changed", which is meaningful even if the response
+    // came back 5xx or with a null Playwright response (httpStatus=0).
+    let matched: boolean;
+    let matchReason: string;
+    if (keywordsConfigured && m.htmlDiffEnabled) {
+      const keywordTrigger = httpOk && keywordsMatched;
+      matched = keywordTrigger || htmlDiffChanged;
+      matchReason = keywordTrigger
+        ? "keyword"
+        : htmlDiffChanged
+          ? "diff"
+          : "none";
+    } else if (keywordsConfigured) {
+      matched = httpOk && keywordsMatched;
+      matchReason = matched ? "keyword" : "none";
+    } else if (m.htmlDiffEnabled) {
+      matched = htmlDiffChanged;
+      matchReason = matched ? "diff" : (htmlDiffFirstSeen ? "first-seen" : "no-change");
+    } else {
+      matched = httpOk;
+      matchReason = matched ? "legacy-http-ok" : "http-not-ok";
+    }
+
+    const status: CheckOutcome["status"] = matched ? "PASSING" : "FAILING";
+    console.log(
+      `[monitor-runner] ${m.name}: check decision → status=${status} reason=${matchReason} httpOk=${httpOk} httpStatus=${fetched.httpStatus} keywordsConfigured=${keywordsConfigured} keywordsMatched=${keywordsMatched} diffEnabled=${m.htmlDiffEnabled} diffChanged=${htmlDiffChanged} diffFirstSeen=${htmlDiffFirstSeen}`,
+    );
 
     return {
-      status: httpOk && keywordsOk ? "PASSING" : "FAILING",
+      status,
       httpStatus: fetched.httpStatus,
       durationMs,
       errorMessage: null,
       keywordResults,
       markerMissing: false,
+      htmlDiff: {
+        enabled: m.htmlDiffEnabled,
+        newHash: htmlDiffNewHash,
+        changed: htmlDiffChanged,
+        firstSeen: htmlDiffFirstSeen,
+      },
     };
   } catch (err) {
     return {
@@ -209,8 +347,28 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
       errorMessage: err instanceof Error ? err.message : String(err),
       keywordResults: [],
       markerMissing: false,
+      htmlDiff: { enabled: m.htmlDiffEnabled, newHash: null, changed: false, firstSeen: false },
     };
   }
+}
+
+/**
+ * Strips noise that changes per-render (CSRF tokens, scripts, comments,
+ * dynamic timestamps) so two semantically-equal pages produce the same hash.
+ * Hashes the normalized result with SHA-256 — we only need 64 chars in the DB,
+ * not the full HTML body.
+ */
+function hashHtml(html: string): string {
+  const normalized = html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<meta\b[^>]*>/gi, "")
+    .replace(/<input\b[^>]*type=["']hidden["'][^>]*>/gi, "")
+    .replace(/<input\b[^>]*name=["']authenticity_token["'][^>]*>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
 type FetchResult = { body: string; httpStatus: number };
@@ -257,14 +415,34 @@ async function fetchWithBrowser(m: CachedMonitor): Promise<FetchResult> {
       waitUntil: "load",
       timeout: 30_000,
     });
-    await page
-      .waitForLoadState("networkidle", { timeout: 3_000 })
-      .catch(() => undefined);
     const httpStatus = response?.status() ?? 0;
+
+    // Give the page time to actually render its dynamic content. Three waits,
+    // racing whichever fires first to keep slow pages from blocking forever:
+    //   1. If a marker keyword is configured, poll for it in the DOM — it's
+    //      the most reliable "the real page rendered" signal.
+    //   2. Otherwise (or in parallel), wait for networkidle (10s cap).
+    //   3. Plus a small fixed settle delay so post-XHR render passes flush.
+    const waitStart = Date.now();
+    if (m.markerKeyword) {
+      await page
+        .waitForFunction(
+          (marker) => document.documentElement.outerHTML.includes(marker),
+          m.markerKeyword,
+          { timeout: 10_000, polling: 300 },
+        )
+        .catch(() => undefined);
+    }
+    await page
+      .waitForLoadState("networkidle", { timeout: 10_000 })
+      .catch(() => undefined);
+    await page.waitForTimeout(500);
+    const settleMs = Date.now() - waitStart;
+
     const body = await page.content();
 
     console.log(
-      `[browser] ${m.name} url=${m.url} status=${httpStatus} bytes=${body.length}`,
+      `[browser] ${m.name} url=${m.url} status=${httpStatus} bytes=${body.length} settle=${settleMs}ms`,
     );
     return { body, httpStatus };
   } finally {
@@ -297,6 +475,9 @@ async function notifyMatch(m: CachedMonitor, outcome: CheckOutcome): Promise<Not
       "Matched: " +
         matchedKeywords.map((k) => `${k.mode === "MISSING" ? "!" : ""}${k.value}`).join(", "),
     );
+  }
+  if (outcome.htmlDiff.changed) {
+    lines.push("HTML changed since last check (diff watcher)");
   }
   lines.push("(monitor paused)");
 

@@ -33,3 +33,6 @@ prisma/*.db-journal
 # Coverage
 coverage/
 .nyc_output/
+
+# Cookie-refresher forensic dumps
+debug-relogin/

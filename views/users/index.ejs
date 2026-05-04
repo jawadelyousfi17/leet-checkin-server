@@ -1,0 +1,111 @@
+<%- include("../partials/header", { title: "Users" }) %>
+
+<%
+  function fmtDate(s) {
+    if (!s) return "—";
+    try { return new Date(s).toLocaleString(); } catch (e) { return s; }
+  }
+  function maskPhone(s) {
+    if (!s) return "—";
+    return s;
+  }
+%>
+
+<h1>Users registry</h1>
+<p class="meta">
+  Source: <code><%= process.env.HOST_API || "(HOST_API unset)" %>/api/all-users</code>
+</p>
+
+<% if (error) { %>
+  <section>
+    <h2>Failed to fetch users</h2>
+    <p><code class="err"><%= error %></code></p>
+    <p class="meta">Check that <code>HOST_API</code> and <code>ALL_USERS_API_TOKEN</code> are set in <code>.env</code> and that the upstream service is reachable.</p>
+  </section>
+<% } else if (users.length === 0) { %>
+  <section>
+    <p class="empty">No users returned by the upstream API.</p>
+  </section>
+<% } else { %>
+  <section>
+    <h2>Summary</h2>
+    <p class="meta">
+      <strong style="color: var(--color-text);"><%= users.length %></strong> total
+      &middot; monitoring active: <strong style="color: var(--color-text);"><%= stats.monitoring %></strong>
+    </p>
+    <div class="filter" style="margin-top: 8px;">
+      <a><span class="badge badge-ok">SMS · <%= stats.sms %></span></a>
+      <a><span class="badge badge-ok">Call · <%= stats.call %></span></a>
+      <a><span class="badge badge-ok">Email · <%= stats.email %></span></a>
+      <a><span class="badge badge-ok">WhatsApp · <%= stats.whatsapp %></span></a>
+      <a><span class="badge badge-ok">Webhook · <%= stats.webhook %></span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>All users (<%= users.length %>)</h2>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Contact</th>
+          <th>Channels</th>
+          <th>Monitoring since</th>
+          <th>Last sign-in</th>
+          <th>Joined</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% users.forEach(function (u) { %>
+          <tr>
+            <td>
+              <div style="display:flex; align-items:center; gap:10px;">
+                <% if (u.avatarUrl) { %>
+                  <img src="<%= u.avatarUrl %>" alt="" width="32" height="32" style="border-radius:50%; border:1px solid var(--color-border);" />
+                <% } %>
+                <div>
+                  <div style="font-weight:600;"><%= u.name || u.email || u.githubUsername || u.id %></div>
+                  <% if (u.githubUsername) { %>
+                    <div class="meta" style="font-size:12px;">
+                      <a href="https://github.com/<%= u.githubUsername %>" target="_blank" rel="noopener">@<%= u.githubUsername %></a>
+                    </div>
+                  <% } %>
+                </div>
+              </div>
+            </td>
+            <td style="font-family: var(--font-mono); font-size: 12px;">
+              <% if (u.email) { %><div><%= u.email %></div><% } %>
+              <% if (u.phoneNumber) { %><div><%= u.phoneNumber %></div><% } %>
+              <% if (u.whatsappNumber && u.whatsappNumber !== u.phoneNumber) { %><div>wa: <%= u.whatsappNumber %></div><% } %>
+              <% if (u.webhookUrl) { %><div style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= u.webhookUrl %>"><%= u.webhookUrl %></div><% } %>
+              <% if (!u.email && !u.phoneNumber && !u.whatsappNumber && !u.webhookUrl) { %>
+                <span class="empty">no contact info</span>
+              <% } %>
+            </td>
+            <td>
+              <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                <span class="badge <%= u.smsEnabled ? 'badge-ok' : 'badge-muted' %>">SMS</span>
+                <span class="badge <%= u.callEnabled ? 'badge-ok' : 'badge-muted' %>">Call</span>
+                <span class="badge <%= u.emailEnabled ? 'badge-ok' : 'badge-muted' %>">Email</span>
+                <span class="badge <%= u.whatsappEnabled ? 'badge-ok' : 'badge-muted' %>">WhatsApp</span>
+                <span class="badge <%= u.webhookEnabled ? 'badge-ok' : 'badge-muted' %>">Webhook</span>
+              </div>
+            </td>
+            <td>
+              <% if (u.monitoringStartedAt) { %>
+                <span class="badge badge-ok">Active</span>
+                <div class="meta" style="font-size:12px; margin-top:2px;"><%= fmtDate(u.monitoringStartedAt) %></div>
+              <% } else { %>
+                <span class="badge badge-muted">Off</span>
+              <% } %>
+            </td>
+            <td class="meta" style="font-size:12px;"><%= fmtDate(u.lastSignInAt) %></td>
+            <td class="meta" style="font-size:12px;"><%= fmtDate(u.createdAt) %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </section>
+<% } %>
+
+<%- include("../partials/footer") %>

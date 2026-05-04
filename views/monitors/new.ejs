@@ -38,6 +38,11 @@
     Render JavaScript (use a headless Chromium — required for SPAs and dynamic content; ~1–3s slower per check)
   </label>
 
+  <label style="flex-direction: row; align-items: center; gap: 10px;">
+    <input name="htmlDiffEnabled" type="checkbox" value="on" />
+    Watch for ANY HTML change (extreme mode — fires notifications when the page differs from the previous check; uses a normalized hash so CSRF tokens / scripts / whitespace are ignored)
+  </label>
+
   <button type="submit">Create monitor</button>
 </form>
 
