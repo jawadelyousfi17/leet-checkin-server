@@ -1,0 +1,28 @@
+{
+  "monitor": {
+    "id": "cmosgcjff00iu547wsw5qjum3",
+    "name": "1337",
+    "url": "https://admission.1337.ma/candidature/check-in",
+    "markerKeyword": "jawadpro17@gmail.com"
+  },
+  "status": "FAILING",
+  "httpStatus": 200,
+  "durationMs": 1878,
+  "errorMessage": null,
+  "markerMissing": false,
+  "keywordResults": [
+    {
+      "keywordId": "cmosgdkqw00je547wooojmbax",
+      "value": "Any available Check-ins will appear here",
+      "mode": "MISSING",
+      "matched": false
+    }
+  ],
+  "htmlDiff": {
+    "enabled": true,
+    "newHash": "ef9c0add894cc6751e0c1c38cb33544d92cf0404969589352a867edc81ea9f42",
+    "changed": false,
+    "firstSeen": false
+  },
+  "capturedAt": "2026-05-05T10:11:10.131Z"
+}

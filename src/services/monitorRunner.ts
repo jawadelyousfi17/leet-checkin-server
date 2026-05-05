@@ -1,9 +1,13 @@
 import crypto from "crypto";
+import fs from "fs/promises";
+import path from "path";
 import { Prisma, type Keyword, type Monitor } from "@prisma/client";
 import { prisma } from "../db";
 import { notify, sendEmailTo, type NotifySummary } from "./notifier";
 import { getBrowser } from "./browser";
 import { refreshLoginCookies, shouldAttemptRefresh } from "./cookieRefresher";
+
+const MONITOR_DEBUG_DIR = process.env.MONITOR_DEBUG_DIR || "./debug-monitor";
 
 type CachedMonitor = Monitor & { keywords: Keyword[] };
 
@@ -19,6 +23,13 @@ type CheckOutcome = {
     newHash: string | null;
     changed: boolean;
     firstSeen: boolean;
+  };
+  // Forensic capture from the browser fetch — present only for renderJs
+  // monitors and only carried along so tick() can dump it to disk on
+  // FAILING/ERROR outcomes. Never persisted to the DB.
+  debug?: {
+    screenshot?: Buffer | undefined;
+    body?: string | undefined;
   };
 };
 
@@ -148,6 +159,10 @@ class MonitorRunner {
       console.error(`[monitor-runner] failed to persist check for ${m.id}:`, err);
     }
 
+    if (outcome.status !== "PASSING") {
+      await dumpCheckDebug(m, outcome);
+    }
+
     // Marker-keyword transition: only email on the OK -> MISSING edge so we
     // don't flood the inbox if the page stays broken across many checks.
     if (m.markerKeyword) {
@@ -259,6 +274,9 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
     // Marker keyword sanity check — verify we're on the right page before
     // even looking at the real keyword rules.
     if (m.markerKeyword && !fetched.body.includes(m.markerKeyword)) {
+      console.error(
+        `[monitor-runner] ${m.name}: ERROR marker-missing httpStatus=${fetched.httpStatus} bodyBytes=${fetched.body.length} marker="${m.markerKeyword}"`,
+      );
       return {
         status: "ERROR",
         httpStatus: fetched.httpStatus,
@@ -267,6 +285,7 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
         keywordResults: [],
         markerMissing: true,
         htmlDiff: { enabled: m.htmlDiffEnabled, newHash: null, changed: false, firstSeen: false },
+        debug: { screenshot: fetched.screenshot, body: fetched.body },
       };
     }
 
@@ -321,9 +340,12 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
     }
 
     const status: CheckOutcome["status"] = matched ? "PASSING" : "FAILING";
-    console.log(
-      `[monitor-runner] ${m.name}: check decision → status=${status} reason=${matchReason} httpOk=${httpOk} httpStatus=${fetched.httpStatus} keywordsConfigured=${keywordsConfigured} keywordsMatched=${keywordsMatched} diffEnabled=${m.htmlDiffEnabled} diffChanged=${htmlDiffChanged} diffFirstSeen=${htmlDiffFirstSeen}`,
-    );
+    const decisionLine = `[monitor-runner] ${m.name}: check decision → status=${status} reason=${matchReason} httpOk=${httpOk} httpStatus=${fetched.httpStatus} keywordsConfigured=${keywordsConfigured} keywordsMatched=${keywordsMatched} diffEnabled=${m.htmlDiffEnabled} diffChanged=${htmlDiffChanged} diffFirstSeen=${htmlDiffFirstSeen}`;
+    if (status === "FAILING") {
+      console.warn(decisionLine);
+    } else {
+      console.log(decisionLine);
+    }
 
     return {
       status,
@@ -338,16 +360,26 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
         changed: htmlDiffChanged,
         firstSeen: htmlDiffFirstSeen,
       },
+      // Carry the screenshot/body through on FAILING so tick() can dump it.
+      // PASSING outcomes also carry it but tick() only persists on non-PASSING.
+      debug: { screenshot: fetched.screenshot, body: fetched.body },
     };
   } catch (err) {
+    const e = err as FetchError;
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[monitor-runner] ${m.name}: ERROR fetch threw — ${message}`,
+      err instanceof Error && err.stack ? `\n${err.stack}` : "",
+    );
     return {
       status: "ERROR",
       httpStatus: null,
       durationMs: Date.now() - startedAt,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: message,
       keywordResults: [],
       markerMissing: false,
       htmlDiff: { enabled: m.htmlDiffEnabled, newHash: null, changed: false, firstSeen: false },
+      debug: { screenshot: e?.debugScreenshot, body: e?.debugBody },
     };
   }
 }
@@ -371,7 +403,16 @@ function hashHtml(html: string): string {
   return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
-type FetchResult = { body: string; httpStatus: number };
+type FetchResult = {
+  body: string;
+  httpStatus: number;
+  screenshot?: Buffer | undefined;
+};
+
+type FetchError = Error & {
+  debugScreenshot?: Buffer | undefined;
+  debugBody?: string | undefined;
+};
 
 async function fetchPlain(m: CachedMonitor): Promise<FetchResult> {
   const headers: Record<string, string> = {};
@@ -395,6 +436,7 @@ async function fetchWithBrowser(m: CachedMonitor): Promise<FetchResult> {
       "accept-language": "en-US,en;q=0.9,fr;q=0.8",
     },
   });
+  let page: import("playwright").Page | null = null;
   try {
     const cookieEntries = parseCookieEntries(m.cookies);
     if (cookieEntries.length > 0) {
@@ -410,7 +452,7 @@ async function fetchWithBrowser(m: CachedMonitor): Promise<FetchResult> {
         })),
       );
     }
-    const page = await context.newPage();
+    page = await context.newPage();
     const response = await page.goto(m.url, {
       waitUntil: "load",
       timeout: 30_000,
@@ -448,13 +490,102 @@ async function fetchWithBrowser(m: CachedMonitor): Promise<FetchResult> {
     const settleMs = Date.now() - waitStart;
 
     const body = await page.content();
+    const screenshot = await page
+      .screenshot({ fullPage: true, type: "png" })
+      .catch(() => undefined);
 
     console.log(
       `[browser] ${m.name} url=${m.url} status=${httpStatus} bytes=${body.length} settle=${settleMs}ms`,
     );
-    return { body, httpStatus };
+    return { body, httpStatus, screenshot };
+  } catch (err) {
+    // Attach whatever forensic artifacts we can grab before the context closes,
+    // so a failed render still produces a screenshot for the caller to dump.
+    const debugScreenshot = page
+      ? await page.screenshot({ fullPage: true, type: "png" }).catch(() => undefined)
+      : undefined;
+    const debugBody = page ? await page.content().catch(() => "") : "";
+    const wrapped: FetchError =
+      err instanceof Error ? (err as FetchError) : Object.assign(new Error(String(err)));
+    wrapped.debugScreenshot = debugScreenshot;
+    wrapped.debugBody = debugBody;
+    throw wrapped;
   } finally {
     await context.close().catch(() => undefined);
+  }
+}
+
+function slugifyName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60) || "monitor";
+}
+
+const DEBUG_KEEP = 5;
+
+async function pruneOldDumps(monitorDir: string): Promise<void> {
+  const entries = await fs.readdir(monitorDir, { withFileTypes: true }).catch(() => []);
+  // Folder names start with the ISO timestamp, so lexicographic sort = chronological.
+  const dirs = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+  const toDelete = dirs.slice(0, Math.max(0, dirs.length - DEBUG_KEEP));
+  await Promise.all(
+    toDelete.map((name) =>
+      fs.rm(path.join(monitorDir, name), { recursive: true, force: true }).catch((err) => {
+        console.warn(
+          `[monitor-runner] failed to prune debug dir ${name}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }),
+    ),
+  );
+}
+
+async function dumpCheckDebug(m: CachedMonitor, outcome: CheckOutcome): Promise<void> {
+  if (!outcome.debug || (!outcome.debug.screenshot && !outcome.debug.body)) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const reason = outcome.markerMissing ? "marker-missing" : outcome.status.toLowerCase();
+  const monitorDir = path.join(MONITOR_DEBUG_DIR, slugifyName(m.name));
+  const dir = path.join(monitorDir, `${stamp}-${reason}`);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const writes: Promise<unknown>[] = [];
+    if (outcome.debug.screenshot) {
+      writes.push(fs.writeFile(path.join(dir, "screenshot.png"), outcome.debug.screenshot));
+    }
+    if (outcome.debug.body) {
+      writes.push(fs.writeFile(path.join(dir, "body.html"), outcome.debug.body));
+    }
+    const meta = {
+      monitor: { id: m.id, name: m.name, url: m.url, markerKeyword: m.markerKeyword },
+      status: outcome.status,
+      httpStatus: outcome.httpStatus,
+      durationMs: outcome.durationMs,
+      errorMessage: outcome.errorMessage,
+      markerMissing: outcome.markerMissing,
+      keywordResults: outcome.keywordResults.map((r) => {
+        const k = m.keywords.find((kk) => kk.id === r.keywordId);
+        return {
+          keywordId: r.keywordId,
+          value: k?.value,
+          mode: k?.mode,
+          matched: r.matched,
+        };
+      }),
+      htmlDiff: outcome.htmlDiff,
+      capturedAt: new Date().toISOString(),
+    };
+    writes.push(fs.writeFile(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2)));
+    await Promise.all(writes);
+    console.log(
+      `[monitor-runner] ${m.name}: ${outcome.status} debug dumped → ${path.resolve(dir)}`,
+    );
+    await pruneOldDumps(monitorDir);
+  } catch (err) {
+    console.warn(
+      `[monitor-runner] ${m.name}: failed to dump ${outcome.status} debug:`,
+      err instanceof Error ? err.message : err,
+    );
   }
 }
 
