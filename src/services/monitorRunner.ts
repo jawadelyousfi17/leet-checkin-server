@@ -424,19 +424,27 @@ async function fetchWithBrowser(m: CachedMonitor): Promise<FetchResult> {
     //   2. Otherwise (or in parallel), wait for networkidle (10s cap).
     //   3. Plus a small fixed settle delay so post-XHR render passes flush.
     const waitStart = Date.now();
+    let markerFound = true;
     if (m.markerKeyword) {
-      await page
+      const found = await page
         .waitForFunction(
           (marker) => document.documentElement.outerHTML.includes(marker),
           m.markerKeyword,
-          { timeout: 10_000, polling: 300 },
+          { timeout: 4_000, polling: 200 },
         )
-        .catch(() => undefined);
+        .then(() => true)
+        .catch(() => false);
+      markerFound = found;
     }
-    await page
-      .waitForLoadState("networkidle", { timeout: 10_000 })
-      .catch(() => undefined);
-    await page.waitForTimeout(500);
+    // If the marker never showed up in 4s, skip the rest of the settle waits —
+    // the page is wrong (logged out, redirected, or broken) and the caller will
+    // trigger a session refresh on the missing-marker outcome.
+    if (markerFound) {
+      await page
+        .waitForLoadState("networkidle", { timeout: 10_000 })
+        .catch(() => undefined);
+      await page.waitForTimeout(500);
+    }
     const settleMs = Date.now() - waitStart;
 
     const body = await page.content();
