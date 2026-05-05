@@ -36,3 +36,5 @@ coverage/
 
 # Cookie-refresher forensic dumps
 debug-relogin/
+
+debug-monitor/
