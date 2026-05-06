@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { Prisma, type Keyword, type Monitor } from "@prisma/client";
@@ -18,12 +17,6 @@ type CheckOutcome = {
   errorMessage: string | null;
   keywordResults: { keywordId: string; matched: boolean }[];
   markerMissing: boolean;
-  htmlDiff: {
-    enabled: boolean;
-    newHash: string | null;
-    changed: boolean;
-    firstSeen: boolean;
-  };
   // Forensic capture from the browser fetch — present only for renderJs
   // monitors and only carried along so tick() can dump it to disk on
   // FAILING/ERROR outcomes. Never persisted to the DB.
@@ -183,37 +176,8 @@ class MonitorRunner {
       return;
     }
 
-    // Persist the new HTML hash on first-seen (so we don't fire on the next
-    // check just because no baseline existed) or whenever it actually changed
-    // (so we don't keep firing on every check after a single change).
-    if (
-      outcome.htmlDiff.enabled &&
-      outcome.htmlDiff.newHash &&
-      outcome.htmlDiff.newHash !== m.htmlDiffBaseline
-    ) {
-      try {
-        await prisma.monitor.update({
-          where: { id: m.id },
-          data: { htmlDiffBaseline: outcome.htmlDiff.newHash },
-        });
-        const cached = this.cache.get(id);
-        if (cached) cached.htmlDiffBaseline = outcome.htmlDiff.newHash;
-        if (outcome.htmlDiff.firstSeen) {
-          console.log(`[monitor-runner] ${m.name}: html diff baseline recorded (first run)`);
-        } else {
-          console.log(`[monitor-runner] ${m.name}: html diff CHANGED — baseline updated`);
-        }
-      } catch (err) {
-        console.error(`[monitor-runner] failed to persist html diff baseline for ${m.id}:`, err);
-      }
-    }
-
     if (outcome.status === "PASSING") {
-      const trigger = outcome.htmlDiff.changed
-        ? "diff"
-        : outcome.keywordResults.some((r) => r.matched)
-          ? "keyword"
-          : "legacy";
+      const trigger = outcome.keywordResults.some((r) => r.matched) ? "keyword" : "legacy";
       console.log(`[monitor-runner] ${m.name}: PASSING (trigger=${trigger}) — notifying + pausing`);
       let summary;
       try {
@@ -284,7 +248,6 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
         errorMessage: `Marker keyword "${m.markerKeyword}" not found in response — wrong page, redirect, login wall, or render failure`,
         keywordResults: [],
         markerMissing: true,
-        htmlDiff: { enabled: m.htmlDiffEnabled, newHash: null, changed: false, firstSeen: false },
         debug: { screenshot: fetched.screenshot, body: fetched.body },
       };
     }
@@ -295,52 +258,23 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
       return { keywordId: k.id, matched };
     });
 
-    // HTML diff — hash a normalized version of the body and compare to the
-    // baseline stored on the monitor. First time we see a body, we record the
-    // baseline but DON'T fire (otherwise every new monitor would trigger).
-    let htmlDiffNewHash: string | null = null;
-    let htmlDiffChanged = false;
-    let htmlDiffFirstSeen = false;
-    if (m.htmlDiffEnabled) {
-      htmlDiffNewHash = hashHtml(fetched.body);
-      if (!m.htmlDiffBaseline) {
-        htmlDiffFirstSeen = true;
-      } else if (m.htmlDiffBaseline !== htmlDiffNewHash) {
-        htmlDiffChanged = true;
-      }
-    }
-
     const httpOk = fetched.httpStatus >= 200 && fetched.httpStatus < 400;
     const keywordsConfigured = m.keywords.length > 0;
     const keywordsMatched =
       keywordsConfigured && keywordResults.some((r) => r.matched);
 
-    // Match logic. Diff watching DOESN'T require httpOk — the whole point is
-    // "tell me if the page changed", which is meaningful even if the response
-    // came back 5xx or with a null Playwright response (httpStatus=0).
     let matched: boolean;
     let matchReason: string;
-    if (keywordsConfigured && m.htmlDiffEnabled) {
-      const keywordTrigger = httpOk && keywordsMatched;
-      matched = keywordTrigger || htmlDiffChanged;
-      matchReason = keywordTrigger
-        ? "keyword"
-        : htmlDiffChanged
-          ? "diff"
-          : "none";
-    } else if (keywordsConfigured) {
+    if (keywordsConfigured) {
       matched = httpOk && keywordsMatched;
       matchReason = matched ? "keyword" : "none";
-    } else if (m.htmlDiffEnabled) {
-      matched = htmlDiffChanged;
-      matchReason = matched ? "diff" : (htmlDiffFirstSeen ? "first-seen" : "no-change");
     } else {
       matched = httpOk;
       matchReason = matched ? "legacy-http-ok" : "http-not-ok";
     }
 
     const status: CheckOutcome["status"] = matched ? "PASSING" : "FAILING";
-    const decisionLine = `[monitor-runner] ${m.name}: check decision → status=${status} reason=${matchReason} httpOk=${httpOk} httpStatus=${fetched.httpStatus} keywordsConfigured=${keywordsConfigured} keywordsMatched=${keywordsMatched} diffEnabled=${m.htmlDiffEnabled} diffChanged=${htmlDiffChanged} diffFirstSeen=${htmlDiffFirstSeen}`;
+    const decisionLine = `[monitor-runner] ${m.name}: check decision → status=${status} reason=${matchReason} httpOk=${httpOk} httpStatus=${fetched.httpStatus} keywordsConfigured=${keywordsConfigured} keywordsMatched=${keywordsMatched}`;
     if (status === "FAILING") {
       console.warn(decisionLine);
     } else {
@@ -354,12 +288,6 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
       errorMessage: null,
       keywordResults,
       markerMissing: false,
-      htmlDiff: {
-        enabled: m.htmlDiffEnabled,
-        newHash: htmlDiffNewHash,
-        changed: htmlDiffChanged,
-        firstSeen: htmlDiffFirstSeen,
-      },
       // Carry the screenshot/body through on FAILING so tick() can dump it.
       // PASSING outcomes also carry it but tick() only persists on non-PASSING.
       debug: { screenshot: fetched.screenshot, body: fetched.body },
@@ -378,29 +306,9 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
       errorMessage: message,
       keywordResults: [],
       markerMissing: false,
-      htmlDiff: { enabled: m.htmlDiffEnabled, newHash: null, changed: false, firstSeen: false },
       debug: { screenshot: e?.debugScreenshot, body: e?.debugBody },
     };
   }
-}
-
-/**
- * Strips noise that changes per-render (CSRF tokens, scripts, comments,
- * dynamic timestamps) so two semantically-equal pages produce the same hash.
- * Hashes the normalized result with SHA-256 — we only need 64 chars in the DB,
- * not the full HTML body.
- */
-function hashHtml(html: string): string {
-  const normalized = html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<meta\b[^>]*>/gi, "")
-    .replace(/<input\b[^>]*type=["']hidden["'][^>]*>/gi, "")
-    .replace(/<input\b[^>]*name=["']authenticity_token["'][^>]*>/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
 type FetchResult = {
@@ -572,7 +480,6 @@ async function dumpCheckDebug(m: CachedMonitor, outcome: CheckOutcome): Promise<
           matched: r.matched,
         };
       }),
-      htmlDiff: outcome.htmlDiff,
       capturedAt: new Date().toISOString(),
     };
     writes.push(fs.writeFile(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2)));
@@ -614,9 +521,6 @@ async function notifyMatch(m: CachedMonitor, outcome: CheckOutcome): Promise<Not
       "Matched: " +
         matchedKeywords.map((k) => `${k.mode === "MISSING" ? "!" : ""}${k.value}`).join(", "),
     );
-  }
-  if (outcome.htmlDiff.changed) {
-    lines.push("HTML changed since last check (diff watcher)");
   }
   lines.push("(monitor paused)");
 

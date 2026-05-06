@@ -13,14 +13,6 @@
   <% if (monitor.renderJs) { %>
     &middot; <span class="badge badge-err">JS</span>
   <% } %>
-  <% if (monitor.htmlDiffEnabled) { %>
-    &middot; <span class="badge badge-err">DIFF</span>
-    <% if (monitor.htmlDiffBaseline) { %>
-      <small>baseline <code><%= monitor.htmlDiffBaseline.slice(0, 12) %>…</code></small>
-    <% } else { %>
-      <small>(no baseline yet)</small>
-    <% } %>
-  <% } %>
   <% if (monitor.markerKeyword) { %>
     &middot; marker: <code><%= monitor.markerKeyword %></code>
   <% } %>

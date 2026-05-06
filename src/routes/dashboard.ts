@@ -29,8 +29,6 @@ dashboardRouter.post("/monitors", async (req, res) => {
   const parsedKeywords = parseKeywords(keywords);
 
   const renderJs = req.body.renderJs === "on" || req.body.renderJs === "true";
-  const htmlDiffEnabled =
-    req.body.htmlDiffEnabled === "on" || req.body.htmlDiffEnabled === "true";
   const markerKeyword =
     typeof req.body.markerKeyword === "string" && req.body.markerKeyword.trim()
       ? req.body.markerKeyword.trim()
@@ -43,7 +41,6 @@ dashboardRouter.post("/monitors", async (req, res) => {
       intervalSec: Math.max(5, Number(intervalSec) || 60),
       cookies: parsedCookies ?? Prisma.JsonNull,
       renderJs,
-      htmlDiffEnabled,
       markerKeyword,
       keywords: { create: parsedKeywords },
     },
@@ -95,17 +92,10 @@ dashboardRouter.post("/monitors/:id", async (req, res) => {
   const parsedCookies = parseCookies(cookies);
   const parsedKeywords = parseKeywords(keywords);
   const renderJs = req.body.renderJs === "on" || req.body.renderJs === "true";
-  const htmlDiffEnabled =
-    req.body.htmlDiffEnabled === "on" || req.body.htmlDiffEnabled === "true";
   const markerKeyword =
     typeof req.body.markerKeyword === "string" && req.body.markerKeyword.trim()
       ? req.body.markerKeyword.trim()
       : null;
-
-  // Reset the baseline when toggling diff on, or when toggling off (so a later
-  // re-enable starts fresh). Otherwise leave it alone so existing baselines
-  // survive name/url/interval edits.
-  const resetBaseline = htmlDiffEnabled !== monitor.htmlDiffEnabled;
 
   await prisma.$transaction([
     prisma.keyword.deleteMany({ where: { monitorId: monitor.id } }),
@@ -117,10 +107,8 @@ dashboardRouter.post("/monitors/:id", async (req, res) => {
         intervalSec: Math.max(5, Number(intervalSec) || 60),
         cookies: parsedCookies ?? Prisma.JsonNull,
         renderJs,
-        htmlDiffEnabled,
         markerKeyword,
         keywords: { create: parsedKeywords },
-        ...(resetBaseline ? { htmlDiffBaseline: null } : {}),
       },
     }),
   ]);
