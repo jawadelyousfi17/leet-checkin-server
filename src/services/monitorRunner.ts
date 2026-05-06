@@ -235,9 +235,11 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
     const fetched = m.renderJs ? await fetchWithBrowser(m) : await fetchPlain(m);
     const durationMs = Date.now() - startedAt;
 
+    const bodyLower = fetched.body.toLowerCase();
+
     // Marker keyword sanity check — verify we're on the right page before
     // even looking at the real keyword rules.
-    if (m.markerKeyword && !fetched.body.includes(m.markerKeyword)) {
+    if (m.markerKeyword && !bodyLower.includes(m.markerKeyword.toLowerCase())) {
       console.error(
         `[monitor-runner] ${m.name}: ERROR marker-missing httpStatus=${fetched.httpStatus} bodyBytes=${fetched.body.length} marker="${m.markerKeyword}"`,
       );
@@ -253,7 +255,7 @@ async function runCheck(m: CachedMonitor): Promise<CheckOutcome> {
     }
 
     const keywordResults = m.keywords.map((k) => {
-      const found = fetched.body.includes(k.value);
+      const found = bodyLower.includes(k.value.toLowerCase());
       const matched = k.mode === "PRESENT" ? found : !found;
       return { keywordId: k.id, matched };
     });
